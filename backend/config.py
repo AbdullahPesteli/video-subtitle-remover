@@ -25,12 +25,13 @@ class Config(QConfig):
         '简体中文': 'ch',
         '繁體中文': 'chinese_cht',
         'English': 'en',
+        'Türkçe': 'tr',
         '한국어': 'ko',
         '日本語': 'japan',
         'Tiếng Việt': 'vi',
         'Español': 'es'
     }
-    interface = OptionsConfigItem("Window", "Interface", "ChineseSimplified", OptionsValidator(intefaceTexts.values()), restart = True)
+    interface = OptionsConfigItem("Window", "Interface", "en", OptionsValidator(intefaceTexts.values()), restart = True)
     
     # 窗口位置和大小
     windowX = ConfigItem("Window", "X", None)
