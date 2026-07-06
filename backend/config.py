@@ -1,10 +1,13 @@
 
 import os
+import sys
 from pathlib import Path
 from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem, 
                             EnumSerializer, RangeValidator, RangeConfigItem, ConfigValidator)
 from backend.tools.constant import InpaintMode, SubtitleDetectMode
 import configparser
+
+os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
 
 # 项目版本号
 VERSION = "1.4.0"
@@ -67,6 +70,10 @@ class Config(QConfig):
     subtitleAreaPixelToleranceXPixel = RangeConfigItem("Main", "SubtitleAreaPixelToleranceXPixel", 20, RangeValidator(0, 300))
     subtitleTimelineBackwardFrameCount = RangeConfigItem("Main", "SubtitleTimelineBackwardFrameCount", 3, RangeValidator(0, 300))
     subtitleTimelineForwardFrameCount = RangeConfigItem("Main", "subtitleTimelineForwardFrameCount", 3, RangeValidator(0, 300))
+    # OCR is the main bottleneck on Apple Silicon CPU-only runs. Subtitles usually
+    # persist for many frames, so sampling at 2 fps is a practical default.
+    subtitleDetectionSampleFps = RangeConfigItem("Main", "SubtitleDetectionSampleFps", 2, RangeValidator(1, 12))
+    subtitleDetectionMaxDimension = RangeConfigItem("Main", "SubtitleDetectionMaxDimension", 1280, RangeValidator(480, 3840))
     # 以下参数仅适用STTN算法时，才生效
     """
     1. STTN_SKIP_DETECTION
@@ -110,6 +117,16 @@ class Config(QConfig):
     saveDirectory = ConfigItem("Main", "SaveDirectory", "", ConfigValidator())
 
 CONFIG_FILE = 'config/config.json'
+
+# For bundled app (PyInstaller), use home directory for config
+if getattr(sys, 'frozen', False):
+    config_dir = os.path.expanduser('~/.subtitle-remover')
+    os.makedirs(config_dir, exist_ok=True)
+    CONFIG_FILE = os.path.join(config_dir, 'config.json')
+else:
+    # Dev mode: use relative path
+    os.makedirs('config', exist_ok=True)
+
 config = Config()
 qconfig.load(CONFIG_FILE, config)
 
@@ -123,7 +140,15 @@ elif isinstance(_detect_mode_value, str) and _detect_mode_value in ("精准", "P
 # 读取界面语言配置
 tr = configparser.ConfigParser()
 
-TRANSLATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interface', f"{config.interface.value}.ini")
+# Handle both dev and bundled (PyInstaller) environments
+_base_dir = os.path.dirname(os.path.abspath(__file__))
+TRANSLATION_FILE = os.path.join(_base_dir, 'interface', f"{config.interface.value}.ini")
+
+# If file not found in dev location, try bundled location
+if not os.path.exists(TRANSLATION_FILE) and hasattr(sys, 'frozen'):
+    _bundled_dir = os.path.join(sys._MEIPASS, 'backend', 'interface')
+    TRANSLATION_FILE = os.path.join(_bundled_dir, f"{config.interface.value}.ini")
+
 tr.read(TRANSLATION_FILE, encoding='utf-8')
 
 # 项目的base目录

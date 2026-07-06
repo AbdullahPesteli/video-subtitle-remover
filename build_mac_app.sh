@@ -27,6 +27,7 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 
 source "${VENV_DIR}/bin/activate"
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
 
 # Clean previous builds
 rm -rf "$BUILD_DIR" "$DIST_DIR" "build" "dist" "${APP_NAME}.spec"
@@ -46,6 +47,7 @@ pyinstaller \
     --onedir \
     --windowed \
     --add-data="${SCRIPT_DIR}/backend:backend" \
+    --add-data="${SCRIPT_DIR}/backend/interface:backend/interface" \
     --add-data="${SCRIPT_DIR}/ui:ui" \
     --add-data="${SCRIPT_DIR}/design:design" \
     --hidden-import=PySide6 \
@@ -55,10 +57,22 @@ pyinstaller \
     --hidden-import=cv2 \
     --hidden-import=torch \
     --hidden-import=torchvision \
+    --hidden-import=pypdfium2 \
+    --hidden-import=pypdfium2_raw \
+    --hidden-import=pyclipper \
     --hidden-import=PIL \
     --collect-all=paddleocr \
     --collect-all=paddlex \
     --collect-all=modelscope \
+    --collect-all=torch \
+    --collect-all=torchvision \
+    --collect-all=pypdfium2 \
+    --collect-all=pypdfium2_raw \
+    --collect-all=pyclipper \
+    --copy-metadata=opencv-python \
+    --copy-metadata=opencv-contrib-python \
+    --copy-metadata=pypdfium2 \
+    --copy-metadata=pyclipper \
     $ICON_FLAG \
     --osx-bundle-identifier="com.todoipictures.subtitleremover" \
     --codesign-identity="-" \

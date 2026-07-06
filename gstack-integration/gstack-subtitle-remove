@@ -5,7 +5,9 @@
 
 set -e
 
-APP_PATH="/Applications/SubtitleRemover.app/Contents/MacOS/SubtitleRemover"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${SUBTITLE_REMOVER_PROJECT_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+PYTHON_BIN="${SUBTITLE_REMOVER_PYTHON:-${PROJECT_DIR}/venv/bin/python}"
 CONFIG_DIR="$HOME/.subtitle-remover"
 OUTPUT_FORMAT="json"
 MODEL="lama"
@@ -13,6 +15,7 @@ DISABLE_GPU=false
 BATCH_MODE=false
 MAX_PARALLEL=2
 QUALITY="medium"
+AREA_RATIO=("0.65" "0.98" "0.05" "0.95")
 
 # Colors
 GREEN='\033[0;32m'
@@ -33,6 +36,8 @@ OPTIONS:
   --max-parallel N           Max parallel jobs (default: 2)
   --no-gpu                   Force CPU-only mode
   -q, --quality LEVEL        Detection quality: low|medium|high (default: medium)
+  --area-ratio A,B,C,D       Subtitle area ratio ymin,ymax,xmin,xmax (default: 0.65,0.98,0.05,0.95)
+  --full-frame               Scan the whole frame (slower, only use if subtitles are not near bottom)
   -f, --format FORMAT        Output format: json|csv (default: json)
   -h, --help                 Show this help
 
@@ -83,6 +88,18 @@ while [[ $# -gt 0 ]]; do
             QUALITY="$2"
             shift 2
             ;;
+        --area-ratio)
+            IFS=',' read -r -a AREA_RATIO <<< "$2"
+            if [[ ${#AREA_RATIO[@]} -ne 4 ]]; then
+                echo -e "${RED}❌ --area-ratio expects ymin,ymax,xmin,xmax${NC}"
+                exit 1
+            fi
+            shift 2
+            ;;
+        --full-frame)
+            AREA_RATIO=("0" "1" "0" "1")
+            shift
+            ;;
         -f|--format)
             OUTPUT_FORMAT="$2"
             shift 2
@@ -107,9 +124,15 @@ if [[ ! -e "$VIDEO_PATH" ]]; then
     exit 1
 fi
 
-if [[ ! -f "$APP_PATH" ]]; then
-    echo -e "${RED}❌ SubtitleRemover.app not found at $APP_PATH${NC}"
-    echo "Install from: https://github.com/pestly/video-subtitle-remover/releases"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+    echo -e "${RED}❌ Python venv not found at $PYTHON_BIN${NC}"
+    echo "Set SUBTITLE_REMOVER_PROJECT_DIR or SUBTITLE_REMOVER_PYTHON."
+    exit 1
+fi
+
+if [[ ! -f "$PROJECT_DIR/backend/main.py" ]]; then
+    echo -e "${RED}❌ SubtitleRemover source not found at $PROJECT_DIR${NC}"
+    echo "Set SUBTITLE_REMOVER_PROJECT_DIR to the video-subtitle-remover checkout."
     exit 1
 fi
 
@@ -149,22 +172,34 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Build args
 ARGS=(
-    "--video" "$VIDEO_PATH"
+    "-m" "backend.main"
+    "--input" "$VIDEO_PATH"
     "--output" "$OUTPUT_PATH"
-    "--model" "$MODEL"
-    "--language" "$LANGUAGE"
-    "--quality" "$QUALITY"
+    "--inpaint-mode" "$MODEL"
+    "--subtitle-area-ratio" "${AREA_RATIO[0]}" "${AREA_RATIO[1]}" "${AREA_RATIO[2]}" "${AREA_RATIO[3]}"
 )
 
 if [[ "$DISABLE_GPU" == true ]]; then
     ARGS+=("--no-gpu")
 fi
 
+case "$QUALITY" in
+    low)
+        ARGS+=("--detect-fps" "1" "--ocr-max-dim" "960")
+        ;;
+    high)
+        ARGS+=("--detect-fps" "4" "--ocr-max-dim" "1920")
+        ;;
+    *)
+        ARGS+=("--detect-fps" "2" "--ocr-max-dim" "1280")
+        ;;
+esac
+
 # Run
 echo -e "${YELLOW}⏳ Processing... (this may take 5-20 minutes)${NC}"
 START_TIME=$(date +%s)
 
-if ! "$APP_PATH" "${ARGS[@]}"; then
+if ! (cd "$PROJECT_DIR" && "$PYTHON_BIN" "${ARGS[@]}"); then
     echo -e "${RED}❌ Processing failed${NC}"
     exit 1
 fi

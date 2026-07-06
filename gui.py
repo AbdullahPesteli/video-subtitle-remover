@@ -162,6 +162,11 @@ class SubtitleExtractorGUI(FluentWindow):
 
 
 if __name__ == '__main__':
+    cli_flags = {"--input", "-i", "--video", "--output", "-o", "--subtitle-area-coords", "-c", "--inpaint-mode", "--model"}
+    if any(arg in cli_flags for arg in sys.argv[1:]):
+        from backend.main import main as backend_cli_main
+        sys.exit(backend_cli_main(sys.argv[1:]))
+
     multiprocessing.set_start_method("spawn")
     QApplication.setHighDpiScaleFactorRoundingPolicy(
     Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)

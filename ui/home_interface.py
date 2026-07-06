@@ -152,7 +152,7 @@ class HomeInterface(QWidget):
         right_layout.addWidget(button_container)
 
         main_layout.addLayout(right_layout, 1)
-    
+
     def on_scroll_change(self, value):
         """监控滚动条位置变化"""
         scrollbar = self.output_text.verticalScrollBar()
@@ -341,8 +341,11 @@ class HomeInterface(QWidget):
                             # 获取字幕区域坐标，未选择则使用全屏
                             subtitle_areas = self.task_list_component.get_task_option(self.current_processing_task_index, TaskOptions.SUB_AREAS, [])
                             if not subtitle_areas or len(subtitle_areas) <= 0:
-                                subtitle_areas = [(0, self.frame_height, 0, self.frame_width)]
-                                self.task_list_component.update_task_option(self.current_processing_task_index, TaskOptions.SUB_AREAS, subtitle_areas)
+                                self.video_display_component.load_selections_from_config()
+                                subtitle_areas = self.video_display_component.get_selection_rects()
+                            if not subtitle_areas or len(subtitle_areas) <= 0:
+                                subtitle_areas = [(0, 1, 0, 1)]
+                            self.task_list_component.update_task_option(self.current_processing_task_index, TaskOptions.SUB_AREAS, subtitle_areas)
 
                             self.video_display_component.save_selections_to_config()
 
@@ -685,4 +688,3 @@ class HomeInterface(QWidget):
         except Exception as e:
             print(f"Error during close window:", e)
         super().closeEvent(event)
-    

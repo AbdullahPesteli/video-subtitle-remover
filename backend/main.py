@@ -336,8 +336,12 @@ class SubtitleRemover:
         # 记录开始时间
         start_time = time.time()
         if len(self.sub_areas) == 0:
-            self.append_output(tr['Main']['FullScreenProcessingNote'])
-            self.sub_areas.append((0, self.frame_height, 0, self.frame_width))
+            self.sub_areas = self.default_subtitle_areas()
+            if self.sub_areas:
+                self.append_output(f"Using default subtitle area: {self.sub_areas}")
+            else:
+                self.append_output(tr['Main']['FullScreenProcessingNote'])
+                self.sub_areas.append((0, self.frame_height, 0, self.frame_width))
         self.append_output(tr['Main']['SubtitleArea'].format(self.sub_areas))
         self.append_output(tr['Main']['ABSection'].format(str(self.ab_sections).replace("range", "") if self.ab_sections is not None and len(self.ab_sections) > 0 else tr['Main']['ABSectionAll']))
         # 如果使用GPU加速，则打印GPU加速提示
@@ -424,7 +428,10 @@ class SubtitleRemover:
                                  "-vn", "-loglevel", "error", temp.name]
         use_shell = True if os.name == "nt" else False
         try:
-            subprocess.check_output(audio_extract_command, stdin=open(os.devnull), shell=use_shell, timeout=600)
+            subprocess.check_output(audio_extract_command, stdin=open(os.devnull), stderr=subprocess.PIPE, shell=use_shell, timeout=600)
+        except subprocess.CalledProcessError as e:
+            self.append_output(tr['Main']['FailToExtractAudio'].format(str(e)))
+            return
         except Exception as e:
             traceback.print_exc()
             self.append_output(tr['Main']['FailToExtractAudio'].format(str(e)))
@@ -438,18 +445,18 @@ class SubtitleRemover:
                                        "-acodec", "copy",
                                        "-loglevel", "error", self.video_out_path]
                 try:
-                    subprocess.check_output(audio_merge_command, stdin=open(os.devnull), shell=use_shell, timeout=600)
+                    subprocess.check_output(audio_merge_command, stdin=open(os.devnull), stderr=subprocess.PIPE, shell=use_shell, timeout=600)
+                    self.is_successful_merged = True
                 except Exception as e:
                     traceback.print_exc()
                     self.append_output(tr['Main']['FailToMergeAudio'].format(str(e)))
-                    return
+                    self.is_successful_merged = False
             if os.path.exists(temp.name):
                 try:
                     os.remove(temp.name)
                 except Exception:
                     #ignore
                     pass
-            self.is_successful_merged = True
         finally:
             temp.close()
             if not self.is_successful_merged:
@@ -469,21 +476,61 @@ class SubtitleRemover:
     def sttn_det_inpaint(self):
         return STTNDetInpaint(self.hardware_accelerator.device, self.model_config.STTN_DET_MODEL_PATH)
 
+    def default_subtitle_areas(self):
+        areas = []
+        areas_str = config.subtitleSelectionAreas.value
+        if not areas_str:
+            return areas
+        for area in areas_str.split(";"):
+            try:
+                ymin_r, ymax_r, xmin_r, xmax_r = map(float, area.split(","))
+            except ValueError:
+                continue
+            ymin = round(max(0.0, min(ymin_r, 1.0)) * self.frame_height)
+            ymax = round(max(0.0, min(ymax_r, 1.0)) * self.frame_height)
+            xmin = round(max(0.0, min(xmin_r, 1.0)) * self.frame_width)
+            xmax = round(max(0.0, min(xmax_r, 1.0)) * self.frame_width)
+            if ymax > ymin and xmax > xmin:
+                areas.append((ymin, ymax, xmin, xmax))
+        return areas
 
-if __name__ == '__main__':
-    multiprocessing.set_start_method("spawn")
+def main(argv=None):
+    multiprocessing.set_start_method("spawn", force=True)
     from backend.tools.args_handler import parse_args
-    args = parse_args()
+    args = parse_args(argv)
     # force english
     config.set(config.interface, 'en')
     TRANSLATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interface', f"{config.interface.value}.ini")
     tr.read(TRANSLATION_FILE, encoding='utf-8')
+    if args.no_gpu:
+        config.hardwareAcceleration.value = False
+    if args.detect_fps is not None:
+        config.subtitleDetectionSampleFps.value = args.detect_fps
+    if args.ocr_max_dim is not None:
+        config.subtitleDetectionMaxDimension.value = args.ocr_max_dim
     sr = SubtitleRemover(args.input)
     if not is_video_or_image(args.input):
-        sr.append_output(f'Error: {video_path} is not supported not corrupted.')
-        exit(-1)
-    sr.sub_areas = args.subtitle_area_coords
-    sr.video_out_path = args.output
+        sr.append_output(f'Error: {args.input} is not supported or corrupted.')
+        return 1
+    if args.subtitle_area_ratio:
+        sr.sub_areas = [
+            (
+                round(max(0.0, min(ymin, 1.0)) * sr.frame_height),
+                round(max(0.0, min(ymax, 1.0)) * sr.frame_height),
+                round(max(0.0, min(xmin, 1.0)) * sr.frame_width),
+                round(max(0.0, min(xmax, 1.0)) * sr.frame_width),
+            )
+            for ymin, ymax, xmin, xmax in args.subtitle_area_ratio
+        ]
+    else:
+        sr.sub_areas = args.subtitle_area_coords
+    if args.output:
+        sr.video_out_path = args.output
     config.inpaintMode.value = args.inpaint_mode
     sr.run()
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
         

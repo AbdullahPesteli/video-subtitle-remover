@@ -27,16 +27,15 @@ class SubtitleDetect:
         self._init_sample_step()
 
     def _init_sample_step(self):
-        """根据视频帧率自适应设置采样间隔，保持每秒至少采样8帧"""
+        """根据视频帧率自适应设置采样间隔。"""
         cap = cv2.VideoCapture(get_readable_path(self.video_path))
         fps = cap.get(cv2.CAP_PROP_FPS)
         cap.release()
-        if fps >= 60:
-            self.SAMPLE_STEP = 4
-        elif fps >= 30:
-            self.SAMPLE_STEP = 3
+        target_fps = max(1, int(config.subtitleDetectionSampleFps.value))
+        if fps and fps > 0:
+            self.SAMPLE_STEP = max(1, int(round(fps / target_fps)))
         else:
-            self.SAMPLE_STEP = 2
+            self.SAMPLE_STEP = 3
 
     @cached_property
     def text_detector(self):
@@ -45,41 +44,90 @@ class SubtitleDetect:
         from paddleocr import TextDetection
         hardware_accelerator = HardwareAccelerator.instance()
         onnx_providers = hardware_accelerator.onnx_providers
+        hpi_providers = [provider for provider in onnx_providers if provider != "CPUExecutionProvider"]
         model_config = ModelConfig()
         return TextDetection(
             model_name=model_config.DET_MODEL_NAME,
             model_dir=model_config.DET_MODEL_DIR,
             device="cpu",
-            enable_hpi=len(onnx_providers) > 0,
+            enable_hpi=hardware_accelerator.has_accelerator() and len(hpi_providers) > 0,
         )
 
-    def detect_subtitle(self, img):
+    @staticmethod
+    def _clip_area(area, width, height):
+        ymin, ymax, xmin, xmax = area
+        ymin = max(0, min(int(round(ymin)), height))
+        ymax = max(0, min(int(round(ymax)), height))
+        xmin = max(0, min(int(round(xmin)), width))
+        xmax = max(0, min(int(round(xmax)), width))
+        if ymin > ymax:
+            ymin, ymax = ymax, ymin
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+        if ymax <= ymin or xmax <= xmin:
+            return None
+        return ymin, ymax, xmin, xmax
+
+    @staticmethod
+    def _dedupe_regions(regions):
+        seen = set()
+        deduped = []
+        for region in regions:
+            if region in seen:
+                continue
+            seen.add(region)
+            deduped.append(region)
+        return deduped
+
+    def _prepare_ocr_image(self, img):
+        max_dim = max(480, int(config.subtitleDetectionMaxDimension.value))
+        height, width = img.shape[:2]
+        largest = max(height, width)
+        if largest <= max_dim:
+            return img, 1.0
+        scale = max_dim / float(largest)
+        resized = cv2.resize(
+            img,
+            (max(1, int(width * scale)), max(1, int(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        return resized, scale
+
+    def _detect_text_regions(self, img, x_offset=0, y_offset=0):
         temp_list = []
-        results = self.text_detector.predict(img)
-        sub_areas = self.sub_areas
-        has_areas = sub_areas is not None and len(sub_areas) > 0
+        ocr_img, scale = self._prepare_ocr_image(img)
+        results = self.text_detector.predict(ocr_img)
+        inv_scale = 1.0 / scale
         for res in results:
             dt_polys = res['dt_polys']
             if dt_polys is None or len(dt_polys) == 0:
                 continue
             coordinate_list = get_coordinates(dt_polys.tolist())
-            if not coordinate_list:
-                continue
-            if not has_areas:
-                temp_list.extend(coordinate_list)
-            elif len(sub_areas) == 1:
-                # 单区域快速路径（最常见场景）
-                s_ymin, s_ymax, s_xmin, s_xmax = sub_areas[0]
-                for xmin, xmax, ymin, ymax in coordinate_list:
-                    if s_xmin <= xmin and xmax <= s_xmax and s_ymin <= ymin and ymax <= s_ymax:
-                        temp_list.append((xmin, xmax, ymin, ymax))
-            else:
-                for xmin, xmax, ymin, ymax in coordinate_list:
-                    for s_ymin, s_ymax, s_xmin, s_xmax in sub_areas:
-                        if s_xmin <= xmin and xmax <= s_xmax and s_ymin <= ymin and ymax <= s_ymax:
-                            temp_list.append((xmin, xmax, ymin, ymax))
-                            break
+            for xmin, xmax, ymin, ymax in coordinate_list:
+                if scale != 1.0:
+                    xmin = int(round(xmin * inv_scale))
+                    xmax = int(round(xmax * inv_scale))
+                    ymin = int(round(ymin * inv_scale))
+                    ymax = int(round(ymax * inv_scale))
+                temp_list.append((xmin + x_offset, xmax + x_offset, ymin + y_offset, ymax + y_offset))
         return temp_list
+
+    def detect_subtitle(self, img):
+        temp_list = []
+        sub_areas = self.sub_areas
+        has_areas = sub_areas is not None and len(sub_areas) > 0
+        if not has_areas:
+            return self._detect_text_regions(img)
+
+        height, width = img.shape[:2]
+        for area in sub_areas:
+            clipped = self._clip_area(area, width, height)
+            if clipped is None:
+                continue
+            ymin, ymax, xmin, xmax = clipped
+            crop = img[ymin:ymax, xmin:xmax]
+            temp_list.extend(self._detect_text_regions(crop, x_offset=xmin, y_offset=ymin))
+        return self._dedupe_regions(temp_list)
 
     def find_subtitle_frame_no(self, sub_remover=None):
         video_cap = cv2.VideoCapture(get_readable_path(self.video_path))
@@ -90,6 +138,7 @@ class SubtitleDetect:
         sampled_results = {}  # frame_no -> temp_list
         if sub_remover:
             sub_remover.append_output(tr['Main']['ProcessingStartFindingSubtitles'])
+        ab_sections = sub_remover.ab_sections if sub_remover is not None else None
         while video_cap.isOpened():
             ret, frame = video_cap.read()
             # 如果读取视频帧失败（视频读到最后一帧）
@@ -97,7 +146,7 @@ class SubtitleDetect:
                 break
             # 读取视频帧成功
             current_frame_no += 1
-            if not is_frame_number_in_ab_sections(current_frame_no - 1, sub_remover.ab_sections):
+            if not is_frame_number_in_ab_sections(current_frame_no - 1, ab_sections):
                 tbar.update(1)
                 continue
             # 仅对采样帧执行 OCR 推理
