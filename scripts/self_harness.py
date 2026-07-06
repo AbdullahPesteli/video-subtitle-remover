@@ -26,6 +26,8 @@ from backend.tools.subtitle_detect import SubtitleDetect  # noqa: E402
 def make_synthetic_video(path: Path, fps: int = 24, frames: int = 48) -> tuple[int, int]:
     width, height = 640, 360
     writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    if not writer.isOpened():
+        raise RuntimeError(f"Could not create synthetic video writer: {path}")
     for _ in range(frames):
         frame = np.full((height, width, 3), (32, 34, 38), dtype=np.uint8)
         cv2.rectangle(frame, (80, 292), (560, 336), (245, 245, 245), -1)
@@ -41,6 +43,8 @@ def make_synthetic_video(path: Path, fps: int = 24, frames: int = 48) -> tuple[i
         )
         writer.write(frame)
     writer.release()
+    if not path.exists() or path.stat().st_size == 0:
+        raise RuntimeError(f"Synthetic video was not created: {path}")
     return width, height
 
 
@@ -78,6 +82,7 @@ def main() -> int:
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
     input_path = work_dir / "vsr_self_harness_input.mp4"
     output_path = work_dir / f"vsr_self_harness_{args.model}.mp4"
     output_path.unlink(missing_ok=True)

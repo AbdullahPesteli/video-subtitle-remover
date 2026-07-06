@@ -1,13 +1,18 @@
 
+import contextlib
+import io
 import os
 import sys
 from pathlib import Path
-from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem, 
-                            EnumSerializer, RangeValidator, RangeConfigItem, ConfigValidator)
-from backend.tools.constant import InpaintMode, SubtitleDetectMode
+from backend.tools.constant import InpaintMode, SubtitleDetectMode, SubtitleMaskMode
 import configparser
 
 os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
+
+_qfluent_stdout = io.StringIO()
+with contextlib.redirect_stdout(_qfluent_stdout):
+    from qfluentwidgets import (qconfig, ConfigItem, QConfig, OptionsValidator, BoolValidator, OptionsConfigItem,
+                                EnumSerializer, RangeValidator, RangeConfigItem, ConfigValidator)
 
 # 项目版本号
 VERSION = "1.4.0"
@@ -44,7 +49,7 @@ class Config(QConfig):
 
     # 使用一个配置项存储所有选区
     # 默认值为一个选区，格式为："ymin,ymax,xmin,xmax;ymin,ymax,xmin,xmax;..."，分号分隔不同选区
-    subtitleSelectionAreas = ConfigItem("Main", "SubtitleSelectionAreas", "0.88,0.99,0.15,0.85")
+    subtitleSelectionAreas = ConfigItem("Main", "SubtitleSelectionAreas", "0.65,0.98,0.05,0.95")
 
     """
     MODE可选算法类型
@@ -54,9 +59,10 @@ class Config(QConfig):
     - InpaintMode.PROPAINTER 算法： 需要消耗大量显存，速度较慢，对运动非常剧烈的视频效果较好
     """
     # 【设置inpaint算法】
-    inpaintMode = OptionsConfigItem("Main", "InpaintMode", InpaintMode.STTN_AUTO, OptionsValidator(InpaintMode), EnumSerializer(InpaintMode))
+    inpaintMode = OptionsConfigItem("Main", "InpaintMode", InpaintMode.OPENCV, OptionsValidator(InpaintMode), EnumSerializer(InpaintMode))
     
     subtitleDetectMode =  OptionsConfigItem("Main", "SubtitleDetectMode", SubtitleDetectMode.PP_OCRv5_SERVER, OptionsValidator(SubtitleDetectMode), EnumSerializer(SubtitleDetectMode))
+    subtitleMaskMode = OptionsConfigItem("Main", "SubtitleMaskMode", SubtitleMaskMode.AREA, OptionsValidator(SubtitleMaskMode), EnumSerializer(SubtitleMaskMode))
 
     # 【设置像素点偏差】
     # 用于判断是不是非字幕区域(一般认为字幕文本框的长度是要大于宽度的，如果字幕框的高大于宽，且大于的幅度超过指定像素点大小，则认为是错误检测)
@@ -137,6 +143,13 @@ if isinstance(_detect_mode_value, str) and _detect_mode_value in ("快速", "Fas
 elif isinstance(_detect_mode_value, str) and _detect_mode_value in ("精准", "Precise"):
     config.set(config.subtitleDetectMode, SubtitleDetectMode.PP_OCRv5_SERVER)
 
+# macOS builds used to persist STTN_AUTO from the upstream default. On Apple
+# Silicon, the measured practical default is OpenCV CPU; migrate the legacy
+# default so an existing app config does not keep reopening in the slow mode.
+if sys.platform == "darwin" and config.inpaintMode.value == InpaintMode.STTN_AUTO:
+    config.set(config.inpaintMode, InpaintMode.OPENCV)
+    config.set(config.hardwareAcceleration, False)
+
 # 读取界面语言配置
 tr = configparser.ConfigParser()
 
@@ -151,7 +164,24 @@ if not os.path.exists(TRANSLATION_FILE) and hasattr(sys, 'frozen'):
 
 tr.read(TRANSLATION_FILE, encoding='utf-8')
 
+def _backend_resource_dir():
+    candidates = []
+    if getattr(sys, 'frozen', False):
+        executable_dir = os.path.dirname(sys.executable)
+        candidates.extend([
+            os.path.abspath(os.path.join(executable_dir, '..', 'Resources', 'backend')),
+            os.path.abspath(os.path.join(executable_dir, '..', 'Frameworks', 'backend')),
+        ])
+        if hasattr(sys, '_MEIPASS'):
+            candidates.append(os.path.join(sys._MEIPASS, 'backend'))
+    candidates.append(str(Path(os.path.abspath(__file__)).parent))
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, 'models')) or os.path.exists(os.path.join(candidate, 'ffmpeg')):
+            return candidate
+    return candidates[-1]
+
+
 # 项目的base目录
-BASE_DIR = str(Path(os.path.abspath(__file__)).parent)
+BASE_DIR = _backend_resource_dir()
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'

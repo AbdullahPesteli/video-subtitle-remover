@@ -25,6 +25,7 @@ class AdvancedSettingInterface(ScrollArea):
     def __init_widgets(self):
         # 创建滚动内容的容器
         self.scrollWidget = QtWidgets.QWidget(self)
+        self.scrollWidget.setObjectName("advancedScrollWidget")
         self.expandLayout = ExpandLayout(self.scrollWidget)
         
         # 设置滚动区域属性

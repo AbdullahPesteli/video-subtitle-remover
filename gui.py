@@ -8,9 +8,101 @@
 
 import sys
 import os
-import configparser
-import cv2
+import json
 import multiprocessing
+
+
+def configure_app_environment():
+    cache_dir = os.path.expanduser("~/Library/Caches/SubtitleRemover")
+    for name in ("matplotlib", "paddle", "paddlex"):
+        try:
+            os.makedirs(os.path.join(cache_dir, name), exist_ok=True)
+        except Exception:
+            pass
+    os.environ.setdefault("MPLCONFIGDIR", os.path.join(cache_dir, "matplotlib"))
+    os.environ.setdefault("PADDLE_HOME", os.path.join(cache_dir, "paddle"))
+    os.environ.setdefault("PADDLE_PDX_CACHE_HOME", os.path.join(cache_dir, "paddlex"))
+
+
+def should_run_cli(argv):
+    cli_flags = {
+        "--input", "-i", "--video",
+        "--output", "-o",
+        "--subtitle-area-coords", "-c",
+        "--subtitle-area-ratio",
+        "--inpaint-mode", "--model",
+        "--no-gpu",
+        "--detect-fps",
+        "--ocr-max-dim",
+        "--mask-deviation",
+        "--mask-mode",
+        "--profile-json",
+        "--allow-slow-models",
+        "--help", "-h",
+    }
+    normalized = {arg.split("=", 1)[0] for arg in argv}
+    if normalized & cli_flags:
+        return True
+    return len(argv) == 1 and not argv[0].startswith("-") and os.path.exists(argv[0])
+
+
+def reject_impractical_cli_model(argv):
+    from backend.tools.args_handler import parse_args
+    from backend.tools.constant import InpaintMode
+
+    args = parse_args(argv)
+    if args.allow_slow_models:
+        return False
+    error = None
+    if sys.platform == "darwin" and args.inpaint_mode == InpaintMode.PROPAINTER:
+        error = (
+            "ProPainter is disabled by default on macOS because this machine measured "
+            "about 159s for 48 synthetic frames and timed out at 900s on the real test. "
+            "Use OpenCV, or rerun with --allow-slow-models for an explicit experiment."
+        )
+    elif args.inpaint_mode == InpaintMode.LAMA and args.no_gpu:
+        error = (
+            "LAMA CPU is disabled by default because it timed out at 600s on the real test. "
+            "Enable GPU/MPS acceleration or rerun with --allow-slow-models for an explicit experiment."
+        )
+    if error is None:
+        return False
+    if args.profile_json:
+        output_dir = os.path.dirname(os.path.abspath(args.profile_json))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(args.profile_json, "w", encoding="utf-8") as f:
+            json.dump({
+                "status": "failed",
+                "metadata": {
+                    "input": os.path.abspath(args.input),
+                    "output": os.path.abspath(args.output) if args.output else None,
+                    "model": args.inpaint_mode.value,
+                    "error": error,
+                    "early_guard": True,
+                },
+                "timing_seconds": {},
+                "events": [{"event": "slow_model_rejected", "model": args.inpaint_mode.value}],
+            }, f, indent=2)
+    print(error, file=sys.stderr)
+    return True
+
+
+configure_app_environment()
+import backend  # noqa: F401  # installs runtime cache and third-party noise filters
+
+if __name__ == '__main__':
+    multiprocessing.freeze_support()
+    if should_run_cli(sys.argv[1:]):
+        if any(arg.split("=", 1)[0] in ("-h", "--help") for arg in sys.argv[1:]):
+            from backend.tools.args_handler import parse_args
+            parse_args(sys.argv[1:])
+            sys.exit(0)
+        if reject_impractical_cli_model(sys.argv[1:]):
+            sys.exit(1)
+        from backend.main import main as backend_cli_main
+        sys.exit(backend_cli_main(sys.argv[1:]))
+
 from PySide6.QtCore import Qt, QTranslator
 from PySide6 import QtCore, QtWidgets, QtGui
 from PySide6.QtWidgets import QApplication, QFrame, QStackedWidget, QHBoxLayout, QLabel
@@ -28,14 +120,71 @@ from ui.advanced_setting_interface import AdvancedSettingInterface
 from ui.home_interface import HomeInterface
 
 
+DARK_APP_STYLE = """
+QWidget#HomeInterface,
+QWidget#AdvancedSettingInterface,
+QWidget#advancedScrollWidget {
+    background: #0d1117;
+    color: #e6edf3;
+}
+
+QTextEdit,
+QPlainTextEdit {
+    background: #0b0f14;
+    color: #dce3ea;
+    border: 1px solid #263241;
+    border-radius: 8px;
+    selection-background-color: #2563eb;
+}
+
+QTableView {
+    background: #0f141b;
+    alternate-background-color: #151b23;
+    color: #dce3ea;
+    border: 0;
+    gridline-color: #263241;
+    selection-background-color: #1f6feb;
+    selection-color: #ffffff;
+}
+
+QHeaderView::section {
+    background: #151b23;
+    color: #c9d1d9;
+    border: 0;
+    padding: 6px;
+}
+
+QMenu {
+    background: #151b23;
+    color: #dce3ea;
+    border: 1px solid #303d4d;
+}
+
+QMenu::item:selected {
+    background: #1f6feb;
+    color: #ffffff;
+}
+"""
+
+
+def apply_dark_theme(app=None):
+    setTheme(Theme.DARK, save=False)
+    try:
+        setThemeColor(getSystemAccentColor(), save=False)
+    except Exception:
+        pass
+    if app is not None:
+        app.setFont(QtGui.QFont(".AppleSystemUIFont"))
+        app.setStyleSheet(DARK_APP_STYLE)
+
+
 class SubtitleExtractorGUI(FluentWindow): 
     def __init__(self):
         super().__init__()
         # 禁用云母效果
         self.setMicaEffectEnabled(False)
-        # 设置深色主题并跟随系统主题色
-        # setTheme(Theme.LIGHT)
-        # setThemeColor(getSystemAccentColor(), save=True)
+        # Keep the panel dark by default; do not persist runtime theme state.
+        apply_dark_theme(QtWidgets.QApplication.instance())
 
         # 初始化系统主题监听器并连接信号
         # self.themeListener = SystemThemeListener(self)
@@ -162,16 +311,12 @@ class SubtitleExtractorGUI(FluentWindow):
 
 
 if __name__ == '__main__':
-    cli_flags = {"--input", "-i", "--video", "--output", "-o", "--subtitle-area-coords", "-c", "--inpaint-mode", "--model"}
-    if any(arg in cli_flags for arg in sys.argv[1:]):
-        from backend.main import main as backend_cli_main
-        sys.exit(backend_cli_main(sys.argv[1:]))
-
-    multiprocessing.set_start_method("spawn")
+    multiprocessing.set_start_method("spawn", force=True)
     QApplication.setHighDpiScaleFactorRoundingPolicy(
     Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QtWidgets.QApplication(sys.argv)
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)
+    apply_dark_theme(app)
     window = SubtitleExtractorGUI()
     # 先设置透明, 再显示, 否则会有闪烁的效果
     window.setWindowOpacity(0.0)

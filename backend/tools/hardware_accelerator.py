@@ -1,9 +1,13 @@
 import traceback
 import importlib.util
 
-import torch
-
 from backend.config import tr
+
+
+def _torch():
+    import torch
+    return torch
+
 
 class HardwareAccelerator:
 
@@ -11,11 +15,15 @@ class HardwareAccelerator:
     _instance = None
 
     @classmethod
-    def instance(cls):
+    def instance(cls, enabled=None):
         """获取单例实例"""
         if cls._instance is None:
             cls._instance = HardwareAccelerator()
+            if enabled is not None:
+                cls._instance.__enabled = enabled
             cls._instance.initialize()
+        elif enabled is not None:
+            cls._instance.set_enabled(enabled)
         return cls._instance
 
     def __init__(self):
@@ -24,21 +32,27 @@ class HardwareAccelerator:
         self.__mps = False
         self.__onnx_providers = []
         self.__enabled = True
+        self.__initialized = False
         self.__device = None
 
     def initialize(self):
+        if self.__initialized or not self.__enabled:
+            return
         self.check_directml_available()
         self.check_cuda_available()
         self.check_mps_available()
         self.load_onnx_providers()
+        self.__initialized = True
 
     def check_directml_available(self):
         self.__dml = importlib.util.find_spec("torch_directml")
 
     def check_cuda_available(self):
+        torch = _torch()
         self.__cuda = torch.cuda.is_available()
 
     def check_mps_available(self):
+        torch = _torch()
         self.__mps = torch.backends.mps.is_available() and torch.backends.mps.is_built()
 
     def load_onnx_providers(self):
@@ -105,6 +119,8 @@ class HardwareAccelerator:
 
     def set_enabled(self, enable):
         self.__enabled = enable
+        if enable:
+            self.initialize()
 
     def get_available_vram_mb(self):
         """获取可用 GPU 显存（MB），无 GPU 返回 0"""
@@ -112,6 +128,7 @@ class HardwareAccelerator:
             return 0
         if self.__cuda:
             try:
+                torch = _torch()
                 free_vram = torch.cuda.mem_get_info()[0]  # (free, total)
                 return free_vram / (1024 * 1024)
             except Exception:
@@ -149,7 +166,10 @@ class HardwareAccelerator:
                     traceback.print_exc()
                     self.__dml = False
             if self.__cuda:
+                torch = _torch()
                 return torch.device("cuda:0")
             if self.__mps:
+                torch = _torch()
                 return torch.device("mps")
+        torch = _torch()
         return torch.device("cpu")

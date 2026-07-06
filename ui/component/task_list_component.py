@@ -83,8 +83,39 @@ class TaskListComponent(QWidget):
         
         # 创建表格
         self.table = TableWidget(self)
+        self.table.setObjectName("taskTable")
         self.table.setColumnCount(3)
         self.table.setHorizontalHeaderLabels([tr['TaskList']['Name'], tr['TaskList']['Progress'], tr['TaskList']['Status']])
+        self.table.setStyleSheet("""
+            TableWidget#taskTable,
+            QTableView#taskTable {
+                background-color: #10141b;
+                alternate-background-color: #151b23;
+                color: #dce3ea;
+                border: 0;
+                gridline-color: #263241;
+                selection-background-color: #1f6feb;
+                selection-color: #ffffff;
+            }
+
+            QTableView#taskTable::item {
+                border: 0;
+                padding: 6px;
+            }
+
+            QTableView#taskTable::item:selected {
+                background-color: #1f6feb;
+                color: #ffffff;
+            }
+
+            QHeaderView::section {
+                background-color: #151b23;
+                color: #c9d1d9;
+                border: 0;
+                border-bottom: 1px solid #263241;
+                padding: 8px;
+            }
+        """)
         
         # 设置表格样式
         self.table.setShowGrid(False)

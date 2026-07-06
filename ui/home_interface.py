@@ -88,13 +88,31 @@ class HomeInterface(QWidget):
         
         # 输出文本区域
         self.output_text = TextEdit()
+        self.output_text.setObjectName("outputLog")
         self.output_text.setMinimumHeight(150)
         self.output_text.setReadOnly(True)
         self.output_text.document().setDocumentMargin(10)        
+        self.output_text.setStyleSheet("""
+            TextEdit#outputLog {
+                background-color: #0b0f14;
+                color: #dce3ea;
+                border: 1px solid #263241;
+                border-radius: 8px;
+                selection-background-color: #2563eb;
+            }
+        """)
         # 连接滚动条值变化信号
         self.output_text.verticalScrollBar().valueChanged.connect(self.on_scroll_change)
         
         output_container = CardWidget(self)
+        output_container.setObjectName("outputContainer")
+        output_container.setStyleSheet("""
+            CardWidget#outputContainer {
+                background-color: #10141b;
+                border: 1px solid #263241;
+                border-radius: 8px;
+            }
+        """)
         output_layout = QVBoxLayout()
         output_layout.setContentsMargins(0, 0, 0, 0)
         output_layout.addWidget(self.output_text)

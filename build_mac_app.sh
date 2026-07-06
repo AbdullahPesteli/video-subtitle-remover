@@ -6,12 +6,14 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${SCRIPT_DIR}/venv"
+VENV_DIR="${VSR_VENV_DIR:-${SCRIPT_DIR}/venv}"
 APP_NAME="SubtitleRemover"
 MAIN_SCRIPT="${SCRIPT_DIR}/gui.py"
 ICON_FILE="${SCRIPT_DIR}/resource/icon.svg"  # Fallback to default if exists
 BUILD_DIR="${SCRIPT_DIR}/build"
 DIST_DIR="${SCRIPT_DIR}/dist"
+STAGE_DIR="${SCRIPT_DIR}/.context/pyinstaller-data"
+STAGE_BACKEND="${STAGE_DIR}/backend"
 
 # Colors
 GREEN='\033[0;32m'
@@ -28,9 +30,29 @@ fi
 
 source "${VENV_DIR}/bin/activate"
 export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+export MPLCONFIGDIR="${HOME}/Library/Caches/SubtitleRemover/matplotlib"
+mkdir -p "$MPLCONFIGDIR"
 
 # Clean previous builds
-rm -rf "$BUILD_DIR" "$DIST_DIR" "build" "dist" "${APP_NAME}.spec"
+rm -rf "$BUILD_DIR" "$DIST_DIR" "build" "dist" "${APP_NAME}.spec" "$STAGE_DIR"
+mkdir -p "$STAGE_BACKEND/ffmpeg" "$STAGE_DIR/design"
+
+echo -e "${BLUE}🧩 Preparing minimal bundle data...${NC}"
+python - <<'PY'
+from backend.tools.model_config import ModelConfig
+
+model_config = ModelConfig()
+model_config.ensure_lama_model()
+model_config.ensure_propainter_model()
+PY
+rsync -a --exclude='__pycache__' "${SCRIPT_DIR}/backend/interface/" "${STAGE_BACKEND}/interface/"
+rsync -a --exclude='__pycache__' "${SCRIPT_DIR}/backend/ffmpeg/macos/" "${STAGE_BACKEND}/ffmpeg/macos/"
+rsync -a \
+    --exclude='__pycache__' \
+    --exclude='big-lama_[0-9].pt' \
+    --exclude='ProPainter_[0-9].pth' \
+    "${SCRIPT_DIR}/backend/models/" "${STAGE_BACKEND}/models/"
+cp "${SCRIPT_DIR}/design/vsr.ico" "${STAGE_DIR}/design/vsr.ico"
 
 # Build with PyInstaller
 echo -e "${BLUE}📦 Running PyInstaller...${NC}"
@@ -46,10 +68,9 @@ pyinstaller \
     --name="${APP_NAME}" \
     --onedir \
     --windowed \
-    --add-data="${SCRIPT_DIR}/backend:backend" \
-    --add-data="${SCRIPT_DIR}/backend/interface:backend/interface" \
+    --add-data="${STAGE_BACKEND}:backend" \
     --add-data="${SCRIPT_DIR}/ui:ui" \
-    --add-data="${SCRIPT_DIR}/design:design" \
+    --add-data="${STAGE_DIR}/design:design" \
     --hidden-import=PySide6 \
     --hidden-import=qfluentwidgets \
     --hidden-import=paddleocr \
@@ -57,6 +78,8 @@ pyinstaller \
     --hidden-import=cv2 \
     --hidden-import=torch \
     --hidden-import=torchvision \
+    --hidden-import=backend.inpaint.propainter_inpaint \
+    --hidden-import=scipy._cyutility \
     --hidden-import=pypdfium2 \
     --hidden-import=pypdfium2_raw \
     --hidden-import=pyclipper \

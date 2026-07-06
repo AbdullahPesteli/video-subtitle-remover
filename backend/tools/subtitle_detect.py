@@ -1,5 +1,5 @@
 import sys
-from functools import cached_property
+from functools import cached_property, lru_cache
 
 import cv2
 from tqdm import tqdm
@@ -12,6 +12,17 @@ from backend.config import config, tr
 from backend.scenedetect import scene_detect
 from backend.scenedetect.detectors import ContentDetector
 from backend.tools.inpaint_tools import is_frame_number_in_ab_sections
+
+
+@lru_cache(maxsize=1)
+def paddle_hpi_available():
+    try:
+        from paddlex.utils.deps import require_hpip
+        require_hpip()
+        return True
+    except Exception:
+        return False
+
 
 class SubtitleDetect:
     """
@@ -45,12 +56,17 @@ class SubtitleDetect:
         hardware_accelerator = HardwareAccelerator.instance()
         onnx_providers = hardware_accelerator.onnx_providers
         hpi_providers = [provider for provider in onnx_providers if provider != "CPUExecutionProvider"]
+        enable_hpi = (
+            hardware_accelerator.has_accelerator()
+            and len(hpi_providers) > 0
+            and paddle_hpi_available()
+        )
         model_config = ModelConfig()
         return TextDetection(
             model_name=model_config.DET_MODEL_NAME,
             model_dir=model_config.DET_MODEL_DIR,
             device="cpu",
-            enable_hpi=hardware_accelerator.has_accelerator() and len(hpi_providers) > 0,
+            enable_hpi=enable_hpi,
         )
 
     @staticmethod
