@@ -2,6 +2,7 @@ import sys
 from functools import cached_property, lru_cache
 
 import cv2
+import numpy as np
 from tqdm import tqdm
 
 from .model_config import ModelConfig
@@ -144,6 +145,58 @@ class SubtitleDetect:
             crop = img[ymin:ymax, xmin:xmax]
             temp_list.extend(self._detect_text_regions(crop, x_offset=xmin, y_offset=ymin))
         return self._dedupe_regions(temp_list)
+
+    def detect_subtitle_region(self, sample_count=12, region='bottom', pad=None):
+        """采样若干帧，聚合检测到的文本框，返回单个建议字幕区域。
+
+        用于 GUI 加载视频后自动预填字幕框（省去用户手动画框）。
+
+        Args:
+            sample_count: 均匀采样的帧数量。
+            region: 'bottom' 仅保留竖直中心位于画面下半部分的框（过滤标题/水印/台标）；
+                    'all'  聚合全部检测框。
+            pad: 外扩像素，None 时取 config.subtitleAreaDeviationPixel。
+
+        Returns:
+            (ymin, ymax, xmin, xmax) 原始视频像素坐标（后端字幕区域格式），未检测到时返回 None。
+        """
+        cap = cv2.VideoCapture(get_readable_path(self.video_path))
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if frame_count <= 0 or width <= 0 or height <= 0:
+            cap.release()
+            return None
+        sample_count = max(1, min(int(sample_count), frame_count))
+        frame_nos = np.unique(np.linspace(0, frame_count - 1, sample_count, dtype=int))
+        boxes = []
+        for fno in frame_nos:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(fno))
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                continue
+            boxes.extend(self.detect_subtitle(frame))
+        cap.release()
+        if not boxes:
+            return None
+        if region == 'bottom':
+            mid = height / 2.0
+            bottom = [b for b in boxes if (b[2] + b[3]) / 2.0 >= mid]
+            if bottom:
+                boxes = bottom
+        xmin = min(b[0] for b in boxes)
+        xmax = max(b[1] for b in boxes)
+        ymin = min(b[2] for b in boxes)
+        ymax = max(b[3] for b in boxes)
+        if pad is None:
+            pad = int(config.subtitleAreaDeviationPixel.value)
+        ymin = max(0, ymin - pad)
+        ymax = min(height, ymax + pad)
+        xmin = max(0, xmin - pad)
+        xmax = min(width, xmax + pad)
+        if ymax <= ymin or xmax <= xmin:
+            return None
+        return (ymin, ymax, xmin, xmax)
 
     def find_subtitle_frame_no(self, sub_remover=None):
         video_cap = cv2.VideoCapture(get_readable_path(self.video_path))
