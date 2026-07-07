@@ -16,6 +16,7 @@ from ui.icon.my_fluent_icon import MyFluentIcon
 from backend.config import config, tr
 from backend.tools.constant import InpaintMode
 from backend.tools.subtitle_remover_remote_call import SubtitleRemoverRemoteCall
+from backend.tools.subtitle_detect import SubtitleDetect
 from backend.tools.process_manager import ProcessManager
 from backend.tools.common_tools import get_readable_path, is_image_file, read_image
 
@@ -27,6 +28,7 @@ class HomeInterface(QWidget):
     toggle_buttons_signal = Signal(bool)  # True=显示运行按钮, False=显示停止按钮
     task_status_signal = Signal(int, object)  # (task_index, TaskStatus)
     select_task_signal = Signal(int)  # task_index
+    auto_box_signal = Signal(object, str)  # (video_pixel_box, video_path) 自动检测的字幕框
     def __init__(self, parent=None):
         super().__init__(parent=parent)
         self.setObjectName("HomeInterface")
@@ -52,6 +54,8 @@ class HomeInterface(QWidget):
         self.running_process = None
         self._saved_inpaint_mode = None  # 保存图片锁定前的 inpaint 模式
         self._video_cap_lock = threading.Lock()  # 保护 video_cap 的线程锁
+        self._auto_box_thread = None  # 后台自动字幕框检测线程
+        self._auto_box_token = 0  # 自增令牌，丢弃过期的自动检测结果
 
         # 当前正在处理的任务索引
         self.current_processing_task_index = -1
@@ -64,6 +68,7 @@ class HomeInterface(QWidget):
         self.toggle_buttons_signal.connect(self._toggle_buttons)
         self.task_status_signal.connect(lambda idx, status: self.task_list_component.update_task_status(idx, status))
         self.select_task_signal.connect(self.task_list_component.select_task)
+        self.auto_box_signal.connect(self._apply_auto_box)
 
     def __init_widgets(self):
         """创建主页面"""
@@ -223,7 +228,9 @@ class HomeInterface(QWidget):
             self.video_display_component.load_selections_from_config()
         else:
             self.video_display_component.set_selection_rects(selections)
-    
+        # 若加载后仍没有任何字幕框，则后台自动检测预填（内部有“已有框则跳过”的保护）
+        self._maybe_autodetect_subtitle_box(file_path)
+
     def on_task_deleted(self, index):
         """处理任务被删除事件
         
@@ -617,6 +624,65 @@ class HomeInterface(QWidget):
         self._unlock_inpaint_mode()
         return True
 
+    def _maybe_autodetect_subtitle_box(self, video_path):
+        """加载视频后，若当前没有已选字幕框，则后台用 OCR 自动检测并预填。
+
+        始终不阻塞 UI（在守护线程中运行 OCR），且任何异常都不会影响视频加载。
+        """
+        try:
+            if not config.autoDetectSubtitleAreaOnLoad.value:
+                return
+            if is_image_file(video_path):
+                return
+            if not self.frame_count or self.frame_count <= 1:
+                return
+            # 已有选框则不覆盖用户的选择
+            existing = self.video_display_component.get_selection_rects()
+            if existing and len(existing) > 0:
+                return
+            self._auto_box_token += 1
+            token = self._auto_box_token
+            self.append_output(tr['SubtitleExtractorGUI'].get(
+                'AutoDetectingSubtitle', 'Detecting subtitle area with OCR...'))
+
+            def task():
+                try:
+                    detector = SubtitleDetect(video_path)
+                    box = detector.detect_subtitle_region(sample_count=8, region='bottom')
+                except Exception as exc:
+                    print(f"auto-box detect failed: {exc}")
+                    return
+                if box is None:
+                    return
+                # 过期结果（用户已切换视频）则丢弃
+                if token != self._auto_box_token:
+                    return
+                self.auto_box_signal.emit(box, video_path)
+
+            self._auto_box_thread = threading.Thread(target=task, daemon=True)
+            self._auto_box_thread.start()
+        except Exception as exc:
+            print(f"auto-box trigger failed: {exc}")
+
+    @Slot(object, str)
+    def _apply_auto_box(self, video_box, video_path):
+        """主线程：把自动检测到的字幕框（原始像素）转换为显示比例并预填。"""
+        try:
+            # 结果已过期（用户切换了视频）则丢弃
+            if video_path != self.video_path:
+                return
+            # 期间用户可能已手动画框，尊重之
+            if self.video_display_component.get_selection_rects():
+                return
+            preview_rects = self.video_display_component.video_coordinates_to_preview_coordinates([video_box])
+            if not preview_rects:
+                return
+            self.video_display_component.set_selection_rects(preview_rects)
+            self.append_output(tr['SubtitleExtractorGUI'].get(
+                'AutoDetectedSubtitle', 'Subtitle area auto-filled from OCR.'))
+        except Exception as exc:
+            print(f"apply auto-box failed: {exc}")
+
     def load_as_picture(self, path):
         if not is_image_file(path):
             return False
@@ -669,6 +735,7 @@ class HomeInterface(QWidget):
                 if self.load_video(path):
                     self.append_output(f"{tr['SubtitleExtractorGUI']['OpenVideoSuccess']}: {path}")
                     files_loaded.append(path)
+                    self._maybe_autodetect_subtitle_box(path)
                 else:
                     self.append_output(f"{tr['SubtitleExtractorGUI']['OpenVideoFailed']}: {path}")
             # 正序添加, 确保任务列表顺序一致

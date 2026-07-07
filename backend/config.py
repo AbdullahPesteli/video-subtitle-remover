@@ -80,6 +80,8 @@ class Config(QConfig):
     # persist for many frames, so sampling at 2 fps is a practical default.
     subtitleDetectionSampleFps = RangeConfigItem("Main", "SubtitleDetectionSampleFps", 2, RangeValidator(1, 12))
     subtitleDetectionMaxDimension = RangeConfigItem("Main", "SubtitleDetectionMaxDimension", 1280, RangeValidator(480, 3840))
+    # 加载视频后自动用 OCR 检测字幕区域并预填字幕框（省去手动画框）。仅当当前没有已选框时触发。
+    autoDetectSubtitleAreaOnLoad = ConfigItem("Main", "AutoDetectSubtitleAreaOnLoad", True, BoolValidator())
     # 以下参数仅适用STTN算法时，才生效
     """
     1. STTN_SKIP_DETECTION
