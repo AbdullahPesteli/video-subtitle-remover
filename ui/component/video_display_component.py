@@ -807,6 +807,38 @@ class VideoDisplayComponent(QWidget):
             selection_rects.append((ymin, ymax, xmin, xmax))
         return selection_rects
 
+    def video_coordinates_to_preview_coordinates(self, video_rects):
+        """原始视频像素坐标 -> 预览显示比例坐标（含黑边偏移）。
+
+        这是 preview_coordinates_to_video_coordinates 的逆运算，用于把 OCR 在原始分辨率
+        上检测到的字幕框（像素）转换成 set_selection_rects 需要的显示比例框，从而实现
+        加载视频后自动预填字幕框。若尺度因子尚未就绪则返回空列表。
+
+        Args:
+            video_rects: [(ymin, ymax, xmin, xmax), ...] 原始视频像素坐标。
+        Returns:
+            [(ymin, ymax, xmin, xmax), ...] 显示比例坐标 [0..1]。
+        """
+        if not self.frame_width or not self.frame_height or not self.scaled_width or not self.scaled_height:
+            return []
+        preview_rects = []
+        for rect in video_rects:
+            ymin, ymax, xmin, xmax = rect
+            # 逆映射：ratio = px / frame_dim * scaled_dim + border
+            rxmin = xmin / self.frame_width * self.scaled_width + self.border_left
+            rxmax = xmax / self.frame_width * self.scaled_width + self.border_left
+            rymin = ymin / self.frame_height * self.scaled_height + self.border_top
+            rymax = ymax / self.frame_height * self.scaled_height + self.border_top
+            rxmin, rxmax = min(rxmin, rxmax), max(rxmin, rxmax)
+            rymin, rymax = min(rymin, rymax), max(rymin, rymax)
+            preview_rects.append((
+                max(0.0, min(1.0, rymin)),
+                max(0.0, min(1.0, rymax)),
+                max(0.0, min(1.0, rxmin)),
+                max(0.0, min(1.0, rxmax)),
+            ))
+        return preview_rects
+
     def set_dragger_enabled(self, enabled):
         """设置拖动器是否可用"""
         self.enable_mouse_events = enabled

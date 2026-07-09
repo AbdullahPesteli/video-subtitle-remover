@@ -88,8 +88,8 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           build-args: |
-            ${{ matrix.type == 'cuda' && format('CUDA_VERSION={0}', matrix.version) || '' }}
-            ${{ matrix.type == 'directml' && 'USE_DIRECTML=1' || '' }}
+            CUDA_VERSION=${{ matrix.version }}
+            HARDWARD_ACCELERATOR=${{ matrix.type }}
 
       - name: Docker Hub Description
         uses: peter-evans/dockerhub-description@v4

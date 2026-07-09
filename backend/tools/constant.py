@@ -18,3 +18,13 @@ class SubtitleDetectMode(Enum):
     """
     PP_OCRv5_MOBILE = "PP_OCRv5_MOBILE"
     PP_OCRv5_SERVER = "PP_OCRv5_SERVER"
+
+
+@unique
+class SubtitleMaskMode(Enum):
+    """
+    Mask expansion strategy used after subtitle OCR.
+    """
+    BOX = "box"
+    LINE = "line"
+    AREA = "area"

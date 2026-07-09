@@ -43,6 +43,7 @@ RUN --mount=type=cache,target=/root/.cache,sharing=private \
 RUN --mount=type=cache,target=/root/.cache,sharing=private \
     if [ "${HARDWARD_ACCELERATOR}" = "cpu" ]; then \
         pip install paddlepaddle==3.0 && \
+        pip install torch==2.7.0 torchvision==0.22.0 && \
         pip install -r /vsr/requirements.txt && \
         sed -i 's/HARDWARD_ACCELERATION_OPTION *= *.*/HARDWARD_ACCELERATION_OPTION = False/g' /vsr/backend/config.py; \
     fi

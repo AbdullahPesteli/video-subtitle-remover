@@ -1,0 +1,26 @@
+#:schema https://conductor.build/schemas/settings.repo.schema.json
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = """
+python3 -m venv venv
+venv/bin/python -m pip install --upgrade pip
+venv/bin/python -m pip install paddlepaddle==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+venv/bin/python -m pip install torch==2.7.0 torchvision==0.22.0
+venv/bin/python -m pip install -r requirements.txt
+"""
+archive = "true"
+run_mode = "concurrent"
+
+[scripts.run.gui]
+command = "venv/bin/python gui.py"
+default = true
+icon = "monitor"
+
+[scripts.run.self-test]
+command = "venv/bin/python scripts/self_harness.py --model opencv --work-dir .context/out/vsr-selftest"
+icon = "test-tube"
+
+[scripts.run.cli-sample]
+command = "venv/bin/python -m backend.main --input test/test.mp4 --output .context/out/test_no_sub.mp4 --model opencv --no-gpu --subtitle-area-ratio 0.65 0.98 0.05 0.95"
+icon = "terminal"
